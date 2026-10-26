@@ -4,9 +4,9 @@ import Foundation
 import Security
 
 private let helperVersionNumber = "1.0.7"
-private let helperProtocolRevisionValue = "inventory-routing-v2"
+private let helperProtocolRevisionValue = "security-hardening-v3"
 private let applicationIdentifier = "com.fmdigitech.WireTunnels"
-private let applicationTeamIdentifier = "48W4Z4X56T"
+private let applicationTeamIdentifier = "C72ZK246A3"
 private let systemRoot = URL(fileURLWithPath: "/Library/Application Support/WireTunnels")
 private let systemBinDir = systemRoot.appendingPathComponent("bin", isDirectory: true)
 private let runtimeConfigDir = systemRoot.appendingPathComponent("runtime", isDirectory: true)
@@ -22,6 +22,7 @@ private let legacyRuntimeConfigDirs = [
     legacySystemRoot.appendingPathComponent("wireguard", isDirectory: true)
 ]
 private let metadataDir = systemRoot.appendingPathComponent("metadata", isDirectory: true)
+private let runtimeOwnersFile = metadataDir.appendingPathComponent("runtime-owners.json")
 private let maximumConfigSize = 1024 * 1024
 private let expectedArtifactNames: Set<String> = ["wg", "wg-quick", "wireguard-go"]
 
@@ -516,6 +517,7 @@ final class HelperTool: NSObject, NSXPCListenerDelegate {
 private final class HelperSession: NSObject, WireguardHelperProtocol {
     static let inventoryQueue = DispatchQueue(label: "com.fmdigitech.wiretunnels.inventory")
     static var inventoryMonitoringAvailable = false
+    private static let configurationLock = NSRecursiveLock()
     private let clientBundleURL: URL
     private let clientUser: ClientUser
     private let fileManager = FileManager.default
@@ -562,6 +564,11 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
     }
 
     private func inventoryInterface(_ request: InventoryRoutingRequest) throws -> InventoryLiveInterface {
+        Self.configurationLock.lock()
+        defer { Self.configurationLock.unlock() }
+        // Root bootstrap reconciles persisted protection. XPC clients must own
+        // or be allowed to connect the referenced runtime configuration.
+        if clientUser.uid != 0 { try authorizeRuntime(name: request.configName, action: .connect) }
         guard let config = validatedRuntimeConfig(named: request.configName, allowLegacy: false) else { throw InventoryError.staleOperation }
         let metadata = try sanitizedMetadata(from: Data(contentsOf: config))
         guard metadata.localPublicKey == request.localPublicKey, metadata.publicKey == request.peerPublicKey else {
@@ -628,6 +635,10 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
     }
 
     func startTunnel(named name: String, reply: @escaping (Bool, String?) -> Void) {
+        Self.configurationLock.lock()
+        defer { Self.configurationLock.unlock() }
+        do { try authorizeRuntime(name: name, action: .connect) }
+        catch { reply(false, error.localizedDescription); return }
         guard let configURL = validatedRuntimeConfig(named: name, allowLegacy: false) else {
             reply(false, "Invalid tunnel configuration name")
             return
@@ -675,6 +686,10 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
     }
 
     func stopTunnel(named name: String, reply: @escaping (Bool, String?) -> Void) {
+        Self.configurationLock.lock()
+        defer { Self.configurationLock.unlock() }
+        do { try authorizeRuntime(name: name, action: .disconnect) }
+        catch { reply(false, error.localizedDescription); return }
         guard let configURL = validatedRuntimeConfig(named: name, allowLegacy: true) else {
             reply(false, "Invalid or missing tunnel configuration")
             return
@@ -694,14 +709,17 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
         }
     }
 
-    /// `wg show all dump` prints each interface's private key in its second column;
-    /// the app only needs the public key, so never send the private one over XPC.
-    private static func redactingPrivateKeys(in dump: String) -> String {
-        dump.components(separatedBy: "\n").map { line in
-            var fields = line.components(separatedBy: "\t")
-            if fields.count == 5 { fields[1] = "(hidden)" }
-            return fields.joined(separator: "\t")
-        }.joined(separator: "\n")
+    private func visibleRuntimePaths() throws -> [String: String] {
+        Self.configurationLock.lock()
+        defer { Self.configurationLock.unlock() }
+        let owners = try loadRuntimeOwners()
+        let managed = Set(try loadManagedRecords().map { URL(fileURLWithPath: $0.configPath).lastPathComponent })
+        return try RuntimeConfigLocator.configPaths(
+            in: URL(fileURLWithPath: "/var/run/wireguard"),
+            resolveConfig: { name in
+                guard owners[name] == self.clientUser.uid || managed.contains(name) else { return nil }
+                return self.validatedRuntimeConfig(named: name, allowLegacy: false)
+            })
     }
 
     func runWgShow(reply: @escaping (String?, String?) -> Void) {
@@ -710,7 +728,10 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
             arguments: ["show", "all", "dump"]
         )
         if result.exitCode == 0 {
-            reply(Self.redactingPrivateKeys(in: result.stdout), nil)
+            do {
+                let interfaces = Set(try visibleRuntimePaths().keys)
+                reply(WireGuardDumpRedactor.redact(result.stdout, interfaces: interfaces), nil)
+            } catch { reply(nil, error.localizedDescription) }
         } else {
             reply(nil, result.stderr.isEmpty ? "wg show failed" : result.stderr)
         }
@@ -719,10 +740,7 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
     func runtimeStatusSnapshot(reply: @escaping (Data?, String?) -> Void) {
         do {
             let directory = URL(fileURLWithPath: "/var/run/wireguard", isDirectory: true)
-            let paths = try RuntimeConfigLocator.configPaths(
-                in: directory,
-                resolveConfig: { self.validatedRuntimeConfig(named: $0, allowLegacy: true) }
-            )
+            let paths = try visibleRuntimePaths()
             struct Snapshot: Encodable {
                 let output: String
                 let configPaths: [String: String]
@@ -743,7 +761,7 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
                 reply(nil, result.stderr.isEmpty ? "wg show failed" : result.stderr)
                 return
             }
-            let snapshot = Snapshot(output: Self.redactingPrivateKeys(in: result.stdout), configPaths: paths)
+            let snapshot = Snapshot(output: WireGuardDumpRedactor.redact(result.stdout, interfaces: Set(paths.keys)), configPaths: paths)
             reply(try JSONEncoder().encode(snapshot), nil)
         } catch {
             reply(nil, "Unable to resolve active tunnel configurations: \(error.localizedDescription)")
@@ -1064,6 +1082,8 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
     }
 
     func stageConfig(named name: String, contents: Data, reply: @escaping (Bool, String?) -> Void) {
+        Self.configurationLock.lock()
+        defer { Self.configurationLock.unlock() }
         guard let safeName = validatedConfigName(name), contents.count <= maximumConfigSize else {
             reply(false, "Invalid tunnel configuration")
             return
@@ -1071,6 +1091,20 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
 
         do {
             try validateConfigContents(contents)
+            let managed = try loadManagedRecords()
+            guard !managed.contains(where: { URL(fileURLWithPath: $0.configPath).lastPathComponent == safeName }) else {
+                throw HelperError.authorizationRequired
+            }
+            var owners = try loadRuntimeOwners()
+            let exists = fileManager.fileExists(atPath: runtimeConfigDir.appendingPathComponent(safeName).path)
+            guard RuntimeAccessPolicy.canStage(uid: clientUser.uid, owner: owners[safeName], exists: exists) else {
+                throw HelperError.authorizationRequired
+            }
+            // Reserve the name before writing the config; failures remain owned, never claimable.
+            owners[safeName] = clientUser.uid
+            try createDirectory(metadataDir, permissions: 0o755)
+            try JSONEncoder().encode(owners).write(to: runtimeOwnersFile, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600, .ownerAccountID: 0, .groupOwnerAccountID: 0], ofItemAtPath: runtimeOwnersFile.path)
             try createDirectory(runtimeConfigDir, permissions: 0o700)
             let destination = runtimeConfigDir.appendingPathComponent(safeName, isDirectory: false)
             let temporary = runtimeConfigDir.appendingPathComponent(".\(UUID().uuidString).tmp")
@@ -1139,6 +1173,8 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
         authorization: Data,
         reply: @escaping (Bool, String?) -> Void
     ) {
+        Self.configurationLock.lock()
+        defer { Self.configurationLock.unlock() }
         do {
             try validateAdminAuthorization(authorization)
             guard contents.count <= maximumConfigSize else { throw HelperError.invalidConfig }
@@ -1158,6 +1194,10 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
                 throw HelperError.managedTunnelExists
             }
 
+            guard try loadRuntimeOwners()[safeName] == nil,
+                  !fileManager.fileExists(atPath: runtimeConfigDir.appendingPathComponent(safeName).path) else {
+                throw HelperError.managedTunnelExists
+            }
             let configURL = managedConfigDir.appendingPathComponent(safeName, isDirectory: false)
             guard !fileManager.fileExists(atPath: configURL.path) else {
                 throw HelperError.managedTunnelExists
@@ -1206,6 +1246,8 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
         authorization: Data,
         reply: @escaping (Bool, String?) -> Void
     ) {
+        Self.configurationLock.lock()
+        defer { Self.configurationLock.unlock() }
         do {
             try validateAdminAuthorization(authorization)
             try ensureManagedStore()
@@ -1281,6 +1323,8 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
     }
 
     func deleteManagedTunnel(id: String, authorization: Data, reply: @escaping (Bool, String?) -> Void) {
+        Self.configurationLock.lock()
+        defer { Self.configurationLock.unlock() }
         do {
             try validateAdminAuthorization(authorization)
             try ensureManagedStore()
@@ -1327,12 +1371,17 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
     }
 
     func stageManagedConfig(id: String, reply: @escaping (String?, String?) -> Void) {
+        Self.configurationLock.lock()
+        defer { Self.configurationLock.unlock() }
         do {
             try ensureManagedStore()
             let records = try loadManagedRecords()
             guard let uuid = UUID(uuidString: id),
                   let record = records.first(where: { $0.id == uuid }) else {
                 throw HelperError.managedTunnelNotFound
+            }
+            guard record.managedPolicy?.usersCanConnect == true else {
+                throw HelperError.authorizationRequired
             }
             let source = URL(fileURLWithPath: record.configPath)
             try validateManagedConfigFile(source)
@@ -1423,10 +1472,37 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
     }
 
     private func installVerifiedTools() throws {
-        let sourceDirectory = clientBundleURL
-            .appendingPathComponent("Contents/Resources/wireguard", isDirectory: true)
+        Self.configurationLock.lock()
+        defer { Self.configurationLock.unlock() }
+        try createDirectory(systemRoot, permissions: 0o755)
+        try createDirectory(metadataDir, permissions: 0o755)
+        let transaction = systemRoot.appendingPathComponent(".install-\(UUID().uuidString)", isDirectory: true)
+        // Copy before verifying. No user can change anything inside this directory.
+        try createDirectory(transaction, permissions: 0o700)
+        let stagedBin = transaction.appendingPathComponent("bin", isDirectory: true)
+        let backupBin = systemRoot.appendingPathComponent(".bin-backup-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? fileManager.removeItem(at: transaction)
+            try? fileManager.removeItem(at: backupBin)
+        }
+        let trustedBundle = transaction.appendingPathComponent("Source.app", isDirectory: true)
+        try fileManager.copyItem(at: clientBundleURL, to: trustedBundle)
+        guard SignedBundleVerifier.isValid(trustedBundle,
+            identifier: applicationIdentifier, team: applicationTeamIdentifier) else {
+            throw HelperError.invalidManifest
+        }
+        let sourceDirectory = trustedBundle.appendingPathComponent("Contents/Resources/wireguard", isDirectory: true)
+        // Sealed symlinks must not redirect reads outside the verified snapshot.
+        for relative in ["Contents", "Contents/Resources", "Contents/Resources/wireguard"] {
+            let url = trustedBundle.appendingPathComponent(relative)
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else {
+                throw HelperError.invalidManifest
+            }
+        }
         let sourceManifest = sourceDirectory.appendingPathComponent("manifest.json")
-        let manifestData = try Data(contentsOf: sourceManifest, options: .mappedIfSafe)
+        try validateRegularFile(sourceManifest, expectedSize: nil)
+        let manifestData = try Data(contentsOf: sourceManifest)
         let manifest = try JSONDecoder().decode(RuntimeManifest.self, from: manifestData)
         let names = manifest.artifacts.map(\.name)
         guard manifest.schemaVersion == 1,
@@ -1435,18 +1511,7 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
               Set(names) == expectedArtifactNames else {
             throw HelperError.invalidManifest
         }
-
-        try createDirectory(systemRoot, permissions: 0o755)
-        try createDirectory(metadataDir, permissions: 0o755)
-
-        let transaction = systemRoot.appendingPathComponent(".install-\(UUID().uuidString)", isDirectory: true)
-        let stagedBin = transaction.appendingPathComponent("bin", isDirectory: true)
-        let backupBin = systemRoot.appendingPathComponent(".bin-backup-\(UUID().uuidString)", isDirectory: true)
         try createDirectory(stagedBin, permissions: 0o755)
-        defer {
-            try? fileManager.removeItem(at: transaction)
-            try? fileManager.removeItem(at: backupBin)
-        }
 
         // Bundled Mach-O binaries are re-signed by Xcode after the build phase writes
         // the manifest, so their size/sha256 in the manifest may be stale. We verify
@@ -1799,6 +1864,27 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
         }
     }
 
+    private func loadRuntimeOwners() throws -> [String: Int] {
+        guard fileManager.fileExists(atPath: runtimeOwnersFile.path) else { return [:] }
+        try validateRegularFile(runtimeOwnersFile, expectedSize: nil)
+        try validateRootOwnedFile(runtimeOwnersFile)
+        return try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: runtimeOwnersFile))
+    }
+
+    private func authorizeRuntime(name: String, action: RuntimeAccessPolicy.Action) throws {
+        guard validatedConfigName(name) != nil else { throw HelperError.invalidConfigName }
+        let records = try loadManagedRecords()
+        if let managed = records.first(where: { URL(fileURLWithPath: $0.configPath).lastPathComponent == name }) {
+            guard RuntimeAccessPolicy.canUseManaged(action: action,
+                connect: managed.managedPolicy?.usersCanConnect ?? false,
+                disconnect: managed.managedPolicy?.usersCanDisconnect ?? false) else {
+                throw HelperError.authorizationRequired
+            }
+        } else {
+            guard try loadRuntimeOwners()[name] == clientUser.uid else { throw HelperError.authorizationRequired }
+        }
+    }
+
     private func validatedRuntimeConfig(named name: String, allowLegacy: Bool) -> URL? {
         guard let safeName = validatedConfigName(name) else { return nil }
         let candidates = allowLegacy
@@ -1809,6 +1895,7 @@ private final class HelperSession: NSObject, WireguardHelperProtocol {
             let url = directory.appendingPathComponent(safeName, isDirectory: false)
             guard fileManager.fileExists(atPath: url.path) else { continue }
             if (try? validateRegularFile(url, expectedSize: nil)) != nil,
+               (try? validateRootOwnedFile(url)) != nil,
                let contents = try? Data(contentsOf: url, options: .mappedIfSafe),
                (try? validateConfigContents(contents)) != nil {
                 return url

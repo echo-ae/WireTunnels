@@ -21,6 +21,9 @@ def run_suite(directory, name, sources, args=(), flags=()):
 def main():
     with tempfile.TemporaryDirectory(prefix='wiretunnels-tests-') as temporary:
         directory = Path(temporary)
+        run_suite(directory, 'dump-redaction', ['Shared/WireGuardDumpRedactor.swift', 'Tests/WireGuardDumpRedactorTests.swift'])
+        run_suite(directory, 'runtime-access', ['Shared/RuntimeAccessPolicy.swift', 'Tests/RuntimeAccessPolicyTests.swift'])
+        run_suite(directory, 'bundle-verification', ['Shared/SignedBundleVerifier.swift', 'Tests/SignedBundleVerifierTests.swift'])
         status_model = 'WireTunnels/Models/TunnelStatus.swift'
         run_suite(directory, 'dns-recovery', ['WireTunnelsHelper/DNSRecoveryService.swift', 'Tests/DNSRecoveryTests.swift'])
         run_suite(directory, 'wireguard-dns', ['WireTunnels/Services/WireGuardConfigParser.swift', 'Tests/WireGuardDNSTests.swift'])

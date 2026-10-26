@@ -301,10 +301,14 @@ copy_to_bundle() {
         chmod +x "${OUTPUT_DIR}/${f}"
     done
 
-    # wg and wireguard-go are already signed in the cache (see sign_cached_binary,
-    # called from build_wireguard_go/build_wireguard_tools) — signing here again
-    # on every build, even a cache hit, is what made their bytes (and manifest
-    # sha256) drift on every rebuild despite unchanged pinned revisions.
+    # The cache can come from an unsigned/dev build or a different certificate.
+    # Sign the bundle copies with this build's identity before writing its manifest.
+    if [ "${CODE_SIGNING_ALLOWED:-YES}" != "NO" ]; then
+        for f in wg wireguard-go; do
+            codesign --force --options runtime --timestamp \
+                --sign "${EXPANDED_CODE_SIGN_IDENTITY:?Missing signing identity}" "${OUTPUT_DIR}/${f}"
+        done
+    fi
 
     echo_success "Binaries in bundle:"
     for f in wg "wg-quick" wireguard-go; do

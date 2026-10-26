@@ -10,6 +10,12 @@ final class RecoverableJSONStore<Value: Codable> {
     private let fm = FileManager.default
     private(set) var recoveryWarning: String?
 
+    // Swift 6.3.x EarlyPerfInliner crashes on this generic class's synthesized
+    // destructor under default MainActor isolation (swiftlang/swift#90385).
+    // Keep the workaround local to destruction; all storage operations retain -O.
+    @_optimize(none)
+    deinit {}
+
     private var backup: URL { file.appendingPathExtension("backup") }
 
     init(file: URL, emptyValue: Value) {

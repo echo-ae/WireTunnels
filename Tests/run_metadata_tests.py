@@ -6,6 +6,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = [
+    "Shared/InventoryRouting.swift",
     "WireTunnels/Models/AutoConnectRule.swift",
     "WireTunnels/Models/Tunnel.swift",
     "WireTunnels/Models/HopChain.swift",
@@ -22,7 +23,8 @@ def main():
         directory = Path(temporary)
         executable = directory / "metadata-tests"
         subprocess.run([
-            "swiftc", "-module-cache-path", str(directory / "module-cache"),
+            "swiftc", "-O", "-whole-module-optimization", "-swift-version", "5",
+            "-default-isolation", "MainActor", "-module-cache-path", str(directory / "module-cache"),
             *[str(ROOT / source) for source in SOURCES], "-o", str(executable),
         ], check=True)
         subprocess.run([str(executable)], check=True)

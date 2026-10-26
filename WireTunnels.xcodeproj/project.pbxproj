@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		AAAA000B2FDC11AA0000000B /* com.fmdigitech.WireTunnels.helper in Embed Helper */ = {isa = PBXBuildFile; fileRef = AAAA00022FDC11AA00000002 /* com.fmdigitech.WireTunnels.helper */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		DCF55BF22FDC20EE00D04703 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = DCF55BF12FDC20EE00D04702 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -83,7 +82,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DCF55BF22FDC20EE00D04703 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -155,7 +153,6 @@
 			);
 			name = WireTunnels;
 			packageProductDependencies = (
-				DCF55BF12FDC20EE00D04702 /* Sparkle */,
 			);
 			productName = WireTunnels;
 			productReference = DCF55BA02FDC10DD00D04602 /* WireTunnels.app */;
@@ -189,7 +186,6 @@
 			mainGroup = DCF55B972FDC10DD00D04602;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				DCF55BF02FDC20EE00D04701 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DCF55BA12FDC10DD00D04602 /* Products */;
@@ -280,6 +276,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WireTunnelsHelper/WireTunnelsHelper.entitlements;
 				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = C72ZK246A3;
@@ -303,6 +300,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WireTunnelsHelper/WireTunnelsHelper.entitlements;
 				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = C72ZK246A3;
@@ -444,6 +442,7 @@
 				CODE_SIGN_ENTITLEMENTS = WireTunnels/WireTunnels.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = C72ZK246A3;
 				ENABLE_APP_SANDBOX = NO;
@@ -481,6 +480,7 @@
 				CODE_SIGN_ENTITLEMENTS = WireTunnels/WireTunnels.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = C72ZK246A3;
 				ENABLE_APP_SANDBOX = NO;
@@ -542,24 +542,9 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		DCF55BF02FDC20EE00D04701 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/sparkle-project/Sparkle";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.0.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
 
-/* Begin XCSwiftPackageProductDependency section */
-		DCF55BF12FDC20EE00D04702 /* Sparkle */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = DCF55BF02FDC20EE00D04701 /* XCRemoteSwiftPackageReference "Sparkle" */;
-			productName = Sparkle;
-		};
-/* End XCSwiftPackageProductDependency section */
+
+
 	};
 	rootObject = DCF55B982FDC10DD00D04602 /* Project object */;
 }
